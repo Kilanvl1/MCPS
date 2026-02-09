@@ -1,0 +1,15 @@
+# Trace files and directory
+tracefiles/
+*.trf
+*.vcd
+
+# Binaries
+*.bin
+*.o
+*.exe
+*.out
+*.dylib
+*.so
+*.dll
+
+Makefile
