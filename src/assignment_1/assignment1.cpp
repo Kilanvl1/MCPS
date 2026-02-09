@@ -19,8 +19,6 @@
 using namespace std;
 using namespace sc_core; // This pollutes namespace, better: only import what you need.
 
-//static const size_t MEM_SIZE = 2500;
-
 SC_MODULE(Memory) {
     public:
     enum Function { FUNC_READ, FUNC_WRITE };
@@ -37,26 +35,9 @@ SC_MODULE(Memory) {
         SC_THREAD(execute);
         sensitive << Port_CLK.pos();
         dont_initialize();
-
-        //m_data = new uint64_t[MEM_SIZE];
     }
-
-    /*
-    ~Memory() {
-        delete[] m_data;
-    }
-
-    void dump() {
-        for (size_t i = 0; i < MEM_SIZE; i++) {
-            cout << setw(5) << i << ": " << setw(5) << m_data[i];
-            if (i % 8 == 7) {
-                cout << endl;
-            }
-        }
-    } */
 
     private:
-    //uint64_t *m_data;
 
     void execute() {
         while (true) {
@@ -76,15 +57,11 @@ SC_MODULE(Memory) {
             wait(100);
 
             if (f == FUNC_READ) {
-                //Port_Data.write((addr < MEM_SIZE) ? m_data[addr] : 0);
                 Port_Data.write(addr * 10);
                 Port_Done.write(RET_READ_DONE);
                 wait();
                 Port_Data.write(float_64_bit_wire); // string with 64 "Z"'s
             } else {
-                //if (addr < MEM_SIZE) {
-                //    m_data[addr] = data;
-               // }
                 Port_Done.write(RET_WRITE_DONE);
             }
         }
