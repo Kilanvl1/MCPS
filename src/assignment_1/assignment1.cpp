@@ -1,25 +1,21 @@
 /*
  * File: assignment1.cpp
  *
- * Framework to implement Task 1 of the Multi-Core Processor Systems lab
+ * Implemented Task 1 of the Multi-Core Processor Systems lab
  * session. This uses the framework library to interface with tracefiles which
  * will drive the read/write requests
  *
- * Author(s): Michiel W. van Tol, Mike Lankamp, Jony Zhang,
+ * Based on Author(s): Michiel W. van Tol, Mike Lankamp, Jony Zhang,
  *            Konstantinos Bousias, Simon Polstra
+ * Single Cache Implementation by Sedef Çakmak and Kilan van Loo
  *
  */
 
 #include <iostream>
-#include <iomanip>
 #include <systemc>
-
 #include "psa.h"
 
 using namespace std;
-using namespace sc_core; // This pollutes namespace, better: only import what you need.
-
-//static const size_t MEM_SIZE = 2500;
 
 SC_MODULE(Memory) {
     public:
@@ -37,27 +33,9 @@ SC_MODULE(Memory) {
         SC_THREAD(execute);
         sensitive << Port_CLK.pos();
         dont_initialize();
-
-        //m_data = new uint64_t[MEM_SIZE];
     }
 
-    /*
-    ~Memory() {
-        delete[] m_data;
-    }
-
-    void dump() {
-        for (size_t i = 0; i < MEM_SIZE; i++) {
-            cout << setw(5) << i << ": " << setw(5) << m_data[i];
-            if (i % 8 == 7) {
-                cout << endl;
-            }
-        }
-    } */
-
-    private:
-    //uint64_t *m_data;
-
+    //m_data removed
     void execute() {
         while (true) {
             wait(Port_Func.value_changed_event());
@@ -76,15 +54,12 @@ SC_MODULE(Memory) {
             wait(100);
 
             if (f == FUNC_READ) {
-                //Port_Data.write((addr < MEM_SIZE) ? m_data[addr] : 0);
                 Port_Data.write(addr * 10);
                 Port_Done.write(RET_READ_DONE);
                 wait();
                 Port_Data.write(float_64_bit_wire); // string with 64 "Z"'s
             } else {
-                //if (addr < MEM_SIZE) {
-                //    m_data[addr] = data;
-               // }
+
                 Port_Done.write(RET_WRITE_DONE);
             }
         }
@@ -93,21 +68,20 @@ SC_MODULE(Memory) {
 
 // cache module between memory and CPU
 
-
 SC_MODULE(Cache) {
 public:
     // Clock
     sc_in<bool> Port_CLK;
 
-    // ===== CPU-side interface =====
+    // CPU-side interface
     sc_in<Memory::Function> Port_CPUFunc;
     sc_in<uint64_t>         Port_CPUAddr;
-    sc_inout_rv<64>         Port_CPUData;   // CPU writes here; cache returns read data here
+    sc_inout_rv<64>         Port_CPUData;   // CPU writes here, cache returns read data here
     sc_out<Memory::RetCode> Port_CPUDone;
     sc_in<bool> Port_CPUReq;
 
 
-    // ===== Memory-side interface =====
+    // Memory-side interface
     sc_out<Memory::Function> Port_MemFunc;
     sc_out<uint64_t>          Port_MemAddr;
     sc_inout_rv<64>           Port_MemData;
@@ -118,7 +92,7 @@ public:
         sensitive << Port_CLK.pos();
         dont_initialize();
 
-        // init all lines invalid
+        // init all lines as invalid
         for (int s = 0; s < NUM_SETS; s++) {
             for (int w = 0; w < WAYS; w++) {
                 lines[s][w].valid = false;
@@ -153,34 +127,39 @@ private:
     uint64_t time_counter;
 
     // Helpers
+
+    // get set index : remove the byte offset + mask the lower index bits (isolate set bits)
     uint32_t get_set(uint64_t addr) const {
         return (addr >> OFFSET_BITS) & ((1u << INDEX_BITS) - 1u);
     }
 
+    //extract tag : remaining upper bits
     uint64_t get_tag(uint64_t addr) const {
         return addr >> (OFFSET_BITS + INDEX_BITS);
     }
 
-    // Base address of a cache line (for writeback logging/memory op)
+    //reconstruct base address to be used during eviction
     uint64_t line_base_addr(uint64_t tag, uint32_t set) const {
         return (tag << (OFFSET_BITS + INDEX_BITS)) | (uint64_t(set) << OFFSET_BITS);
     }
 
+    //search to determine if already cached
     int find_hit_way(uint32_t set, uint64_t tag) const {
         for (int w = 0; w < WAYS; w++) {
-            if (lines[set][w].valid && lines[set][w].tag == tag) {
+            if (lines[set][w].valid && lines[set][w].tag == tag) { //hit if line valid + tag matches
                 return w;
             }
         }
         return -1;
     }
 
+    // select cache line to replace (victim)
     int choose_victim(uint32_t set) const {
         // Prefer invalid line
         for (int w = 0; w < WAYS; w++) {
             if (!lines[set][w].valid) return w;
         }
-        // Else LRU: smallest last_used
+        // Else select with smallest LRU
         int victim = 0;
         uint64_t min_used = lines[set][0].last_used;
         for (int w = 1; w < WAYS; w++) {
@@ -192,15 +171,17 @@ private:
         return victim;
     }
 
+    // Issue a read request to memory and block until reply
     void mem_read_blocking(uint64_t addr) {
-        // Request memory read; Memory module models 100 cycles and then toggles done.
+        // Memory module models 100 cycles
         Port_MemAddr.write(addr);
         Port_MemFunc.write(Memory::FUNC_READ);
         wait(Port_MemDone.value_changed_event());
     }
 
+    // Issue a write request to main memory and block until memory replies
     void mem_write_blocking(uint64_t addr, uint64_t data) {
-        // Request memory write; Memory module models 100 cycles and then toggles done.
+
         Port_MemAddr.write(addr);
         Port_MemFunc.write(Memory::FUNC_WRITE);
 
@@ -209,8 +190,10 @@ private:
         wait();
         Port_MemData.write(float_64_bit_wire);
 
-        wait(Port_MemDone.value_changed_event());
+        wait(Port_MemDone.value_changed_event()); // memory completes after 100 cycles
     }
+
+    //reply to cpu after request is finished
 
     void reply_to_cpu(Memory::Function f, uint64_t addr) {
         if (f == Memory::FUNC_READ) {
@@ -218,7 +201,7 @@ private:
             uint64_t data = addr * 10;
             Port_CPUData.write(data);
             wait(); // allow CPU to sample
-            Port_CPUData.write(float_64_bit_wire);
+            Port_CPUData.write(float_64_bit_wire); // release bus
 
             Port_CPUDone.write(Memory::RET_READ_DONE);
         } else {
@@ -230,11 +213,10 @@ private:
     // Main behavior
     void execute() {
         while (true) {
-            // sc_buffer triggers value_changed_event on every write
-            // safe for back-to-back reads/writes.
-            wait(Port_CPUReq.posedge_event());
 
+            wait(Port_CPUReq.posedge_event()); // wait until explicit cpu request
 
+            //sample cpu request signals
             Memory::Function f = Port_CPUFunc.read();
             uint64_t addr      = Port_CPUAddr.read();
 
@@ -246,15 +228,17 @@ private:
                 log(name(), "read address =", addr);
             }
 
+            //decode address
             uint32_t set = get_set(addr);
             uint64_t tag = get_tag(addr);
 
+            //check for hit
             int hit_way = find_hit_way(set, tag);
 
 
             // HIT
             if (hit_way != -1) {
-                // Stats + log
+                // Update stats + log
                 if (f == Memory::FUNC_READ) {
                     stats_readhit(0);
                     log(name(), "read hit address =", addr, "set =", set, "line =", hit_way);
@@ -277,6 +261,7 @@ private:
             }
 
             // MISS
+            // Update stats + log
             if (f == Memory::FUNC_READ) {
                 stats_readmiss(0);
                 log(name(), "read miss address =", addr);
@@ -285,9 +270,9 @@ private:
                 log(name(), "write miss address =", addr);
             }
 
-            int victim = choose_victim(set);
+            int victim = choose_victim(set); //choose victim
 
-            // If victim valid and dirty -> write-back before replacing
+            // If victim valid and dirty : write-back --> eviction handling
             if (lines[set][victim].valid && lines[set][victim].dirty) {
                 uint64_t evict_tag  = lines[set][victim].tag;
                 uint64_t evict_addr = line_base_addr(evict_tag, set);
@@ -297,12 +282,12 @@ private:
                     "set =", set, "line =", victim,
                     "tag =", evict_tag);
 
-                // Write-back takes 100 cycles via Memory module
+                // Write-back takes 100 cycles via memory
                 mem_write_blocking(evict_addr, evict_addr * 10);
 
                 lines[set][victim].dirty = false;
             } else if (lines[set][victim].valid) {
-                // Clean eviction
+                // Clean eviction : no write back - log
                 uint64_t evict_tag  = lines[set][victim].tag;
                 uint64_t evict_addr = line_base_addr(evict_tag, set);
 
@@ -312,16 +297,16 @@ private:
                     "tag =", evict_tag);
             }
 
-            // Allocate-on-write policy:
+            // Allocate-on-write / read
             mem_read_blocking(addr);
 
             // Install new line
             lines[set][victim].valid = true;
             lines[set][victim].tag = tag;
-            lines[set][victim].dirty = (f == Memory::FUNC_WRITE); // write-back: dirty if write
+            lines[set][victim].dirty = (f == Memory::FUNC_WRITE);
             lines[set][victim].last_used = ++time_counter;
 
-            // Log completion
+            // Log completion (addr + set + line)
             if (f == Memory::FUNC_READ) {
                 log(name(), "read completed address =", addr, "set =", set, "line =", victim);
             } else {
@@ -338,7 +323,6 @@ private:
 };
 
 
-
 SC_MODULE(CPU) {
     public:
     sc_in<bool> Port_CLK;
@@ -346,8 +330,6 @@ SC_MODULE(CPU) {
     sc_out<Memory::Function> Port_MemFunc;
     sc_out<uint64_t> Port_MemAddr;
     sc_inout_rv<64> Port_MemData;
-
-    //added for blocking cache
     sc_out<bool> Port_CPUReq;
 
 
@@ -374,29 +356,15 @@ SC_MODULE(CPU) {
                 break;
             }
 
-            // To demonstrate the statistic functions, we generate a 50%
-            // probability of a 'hit' or 'miss', and call the statistic
-            // functions below
-
-            //int j = rand() % 2; --> random hit is removed
-
             switch (tr_data.type) {
             case TraceFile::ENTRY_TYPE_READ:
                 f = Memory::FUNC_READ;
-                //random hit is removed
-                //if (j)
-                //    stats_readhit(0);
-                //else
-                //    stats_readmiss(0);
+                    //random hit is removed
                 break;
 
             case TraceFile::ENTRY_TYPE_WRITE:
                 f = Memory::FUNC_WRITE;
                 //random hit is removed
-                //if (j)
-                //    stats_writehit(0);
-                //else
-                //    stats_writemiss(0);
                 break;
 
             case TraceFile::ENTRY_TYPE_NOP: break;
@@ -424,8 +392,7 @@ SC_MODULE(CPU) {
                     wait();                 // 1 cycle pulse
                     Port_CPUReq.write(false);
 
-
-                    // Now float the data wires with 64 "Z"'s
+                    // float the data wires
                     Port_MemData.write(float_64_bit_wire);
 
                 } else {
@@ -437,18 +404,13 @@ SC_MODULE(CPU) {
 
                 wait(Port_MemDone.value_changed_event());
 
-               /* if (f == Memory::FUNC_READ) {
-                    log(name(), "read data", Port_MemData.read().to_uint64(),
-                            "from address", tr_data.addr);
-                }*/
-
                 if (f == Memory::FUNC_READ) {
                     log(name(), "read done address =", tr_data.addr);
                 }
 
 
             } else {
-                //log(name(), "executing NOP");
+                log(name(), "executing NOP");
             }
             // Advance one cycle in simulated time
             wait();
@@ -465,7 +427,6 @@ int sc_main(int argc, char *argv[]) {
     sc_report_handler::set_verbosity_level(SC_MEDIUM);
     // Uncomment the next line to silence the log() messages.
     // sc_report_handler::set_verbosity_level(SC_LOW);
-
 
 
     try {
@@ -503,14 +464,15 @@ int sc_main(int argc, char *argv[]) {
 
         // Connecting module ports with signals
         //rewiring with cache
-        //Memory ports (connected to Cache <-> Memory signals)
+
+        //Memory ports (Cache <-> Memory signals)
         mem.Port_Func(sigMemFunc);
         mem.Port_Addr(sigMemAddr);
         mem.Port_Data(sigMemData);
         mem.Port_Done(sigMemDone);
         mem.Port_CLK(clk);
 
-        //Cache CPU-side ports (connected to CPU <-> Cache signals)
+        //Cache CPU-side ports (CPU <-> Cache signals)
         cache.Port_CPUFunc(sigCPUFunc);
         cache.Port_CPUAddr(sigCPUAddr);
         cache.Port_CPUData(sigCPUData);
@@ -518,7 +480,7 @@ int sc_main(int argc, char *argv[]) {
         cache.Port_CPUReq(sigCPUReq);
 
 
-        //Cache Memory-side ports (connected to Cache <-> Memory signals)
+        //Cache Memory-side ports (Cache <-> Memory signals)
         cache.Port_MemFunc(sigMemFunc);
         cache.Port_MemAddr(sigMemAddr);
         cache.Port_MemData(sigMemData);
