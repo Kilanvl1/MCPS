@@ -25,6 +25,7 @@ SC_MODULE(Memory) {
 
     enum RetCode { RET_READ_DONE, RET_WRITE_DONE };
 
+    // Ports that this module uses to communicate with other modules
     sc_in<bool> Port_CLK;
     sc_in<Function> Port_Func;
     sc_in<uint64_t> Port_Addr;
@@ -200,6 +201,7 @@ private:
             Port_CPUDone.write(Memory::RET_READ_DONE);
         } else {
             Port_CPUDone.write(Memory::RET_WRITE_DONE);
+            wait(); // hold done for one cycle so CPU can see value_changed_event
         }
     }
 
@@ -421,6 +423,8 @@ SC_MODULE(CPU) {
 
                 if (f == Memory::FUNC_READ) {
                     log(name(), "read done address =", tr_data.addr);
+                } else {
+                    log(name(), "write done address =", tr_data.addr);
                 }
 
 
